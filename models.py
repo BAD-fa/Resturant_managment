@@ -1,5 +1,6 @@
+import pickle
 from uuid import uuid4
-from typing import Dict, List
+from typing import Dict, List, Set
 import pickle
 
 from db import BaseQuery
@@ -24,7 +25,8 @@ class User(metaclass=Meta):
         self.first_name = first_name
         self.last_name = last_name
         self.username = username
-        self.password = self.set_password(password)
+        self.password = password
+        self.restaurant = None
         self.id = self.set_id()
 
     def see_profile(self):
@@ -36,12 +38,22 @@ class User(metaclass=Meta):
 
     @staticmethod
     def set_id():
-        return uuid4()
+        return str(uuid4())
 
     def save(self):
         try:
-            with open(USER_DATA_PATH / self.file_name, "ab") as db_file:
-                pickle.dump(self, db_file)
+            with open(USER_DATA_PATH / self.file_name, "ab+") as db_file:
+                if self.query.get("username", self.username) is None:
+                    pickle.dump(self, db_file)
+                else:
+                    data_list = [elm for elm in self.query.load()]
+                    db_file.seek(0)
+                    db_file.truncate()
+                    for elm in data_list:
+                        if elm.username == self.username:
+                            pickle.dump(self, db_file)
+                        else:
+                            pickle.dump(elm, db_file)
 
         except Exception as e:
             print(e)
@@ -65,23 +77,35 @@ class Food:
 class Restaurant(metaclass=Meta):
     file_name = "restaurants.db"
     file_path = RESTAURANTS_DATA_PATH / file_name
-    menu: Dict[str, List] = {}
-    customers: List[User] = []
-    admins: List[User] = []
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, max_admins: int):
         self.name = name
+        self.menu: Dict[str, List] = {}
+        self.customers: List[User] = []
+        self.admins: List[User] = []
+        self.max_admins = max_admins
 
     def __call__(self):
         return self.name
 
     def update_menu(self, food_name: str, count: int):
         self.menu[food_name][1] -= count
+        self.save()
 
     def save(self):
         try:
-            with open(RESTAURANTS_DATA_PATH / self.file_name, "ab") as db_file:
-                pickle.dump(self, db_file)
+            with open(RESTAURANTS_DATA_PATH / self.file_name, "ab+") as db_file:
+                if self.query.get("name", self.name) is None:
+                    pickle.dump(self, db_file)
+                else:
+                    data_list = [elm for elm in self.query.load()]
+                    db_file.seek(0)
+                    db_file.truncate()
+                    for elm in data_list:
+                        if elm.name == self.name:
+                            pickle.dump(self, db_file)
+                        else:
+                            pickle.dump(elm, db_file)
 
         except Exception as e:
             print(e)
@@ -92,10 +116,14 @@ class Admin(User):
     file_path = USER_DATA_PATH / file_name
     type = "Admin"
 
-    def __init__(self, username: str, password: str, first_name: str, last_name: str, restaurant: Restaurant):
-        super().__init__(username, password, first_name, last_name)
-        self.restaurant = restaurant
-        self.restaurant.admins.append(self)
+    # def __init__(self, username: str, password: str, first_name: str, last_name: str, restaurant_name: str):
+    #     super().__init__(username, password, first_name, last_name)
+    #     self.set_restaurant(restaurant_name)
+    #
+    # def set_restaurant(self, restaurant_name):
+    #     print(Restaurant.query.get("name", restaurant_name).name)
+    #     self.restaurant = Restaurant.query.get("name", restaurant_name)
+    #     self.restaurant.admins.append(self)
 
     def menu(self):
         return self.restaurant.menu
@@ -103,12 +131,11 @@ class Admin(User):
     def add_food(self, name: str, price: int, count: int):
         food = Food(name, price)
         self.restaurant.menu[food.name] = [food.price, count]
-
-    def edit_menu(self, food_name: str, count: int):
-        self.restaurant.menu[food_name][1] = count
+        self.restaurant.save()
 
     def remove_food(self, food_name: str):
         self.restaurant.menu.pop(food_name)
+        self.restaurant.save()
 
     def list_of_customers(self):
         return self.restaurant.customers
@@ -128,44 +155,40 @@ class Customer(User):
     file_name = "customer.db"
     file_path = USER_DATA_PATH / file_name
     type = "Customer"
-    restaurant = None
-    history_of_orders: Dict[int, Dict] = {}
-    orders: Dict[str, int] = {}
-    bill = 0
-    can_order = True
 
-    def set_restaurant(self, restaurant_name):
-        self.restaurant = restaurant_name
-        # self.restaurant.customers.append[self]
+    def __init__(self, username: str, password: str, first_name: str, last_name: str):
+        super().__init__(username, password, first_name, last_name)
+        self.history_of_orders: Dict[int, Dict] = {}
+        self.orders: Dict[str, int] = {}
+        self.bill = 0
+        self.can_order = True
+
+    def set_restaurant(self, restaurant_name: str):
+        self.restaurant = Restaurant.query.get("name", restaurant_name)
+        self.restaurant.customers.append(self)
+        self.save()
 
     def order(self, food_name: str, count: int):
         price = self.restaurant.menu[food_name][0]
         self.orders[food_name] = count
         self.restaurant.update_menu(food_name, count)
         self.bill += price * count
+        self.save()
 
     def pay_bill(self):
         self.history_of_orders[self.bill] = self.orders
         self.can_order = True
         self.bill = 0
         self.orders = {}
-        # self.restaurant.save()
+        self.restaurant.save()
         self.restaurant = None
-        # self.save()
+        self.save()
 
     def __str__(self):
         return self.first_name + ' ' + self.last_name
 
 
-R1 = Restaurant("Asghar sag Paz")
-ad = Admin("behrad", "abcd1234", "Behrad", "Fathi", R1)
-ad.add_food("food1", 12000, 5)
-ad.add_food("food2", 15000, 4)
-c1 = Customer("user1", "password1", "name1", "last1")
-c1.set_restaurant(R1)
-c1.order("food1", 3)
-c1.order("food2", 2)
-c1.pay_bill()
-print(c1.bill)
-print(R1.menu)
-
+# for k, v in Customer.query.get("username", "jjj").history_of_orders.items():
+#     print(k, v)
+# print([elm.username for elm in Customer.query.load()])
+# print([elm.username for elm in Admin.query.load()])
